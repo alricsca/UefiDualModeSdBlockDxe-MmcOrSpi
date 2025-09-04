@@ -1,0 +1,9 @@
+#langdef en-US "English"
+
+#string STR_HELP_DESCRIPTION   #language en-US  "SD Card Driver Help System"
+#string STR_HELP_USAGE         #language en-US  "This command displays help information for the SD card driver."
+#string STR_HELP_OPTIONS       #language en-US  "Options:\n  -?, --help  Display this help message"
+
+#string STR_MODE_HOST          #language en-US  "MMC Host Mode"
+#string STR_MODE_SPI           #language en-US  "SPI Mode"
+#string STR_MODE_UNKNOWN       #language en-US  "Unknown Mode"

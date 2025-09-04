@@ -1,0 +1,44 @@
+[Defines]
+  DEC_SPECIFICATION              = 0x00010005
+  PACKAGE_NAME                   = SdCardDxe
+  PACKAGE_GUID                   = 0F1E2D3C-4B5A-6978-8F90-AABBCCDDEFF2
+  PACKAGE_VERSION                = 1.0
+
+[Guids]
+  ## SdCardDxe PCD Token Space GUID
+  gEfiSdCardDxeTokenSpaceGuid    = { 0x0f1e2d3c, 0x4b5a, 0x6978, { 0x8f, 0x90, 0xaa, 0xbb, 0xcc, 0xdd, 0xef, 0xf1 } }
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiBootServicesTableLib
+  UefiLib
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  DebugLib
+  TimerLib
+  DevicePathLib
+  FileHandleLib
+  PrintLib
+  PcdLib
+  RegisterFilterLib
+  DebugPrintErrorLevelLib
+  StackCheckLib
+  StackCheckFailureHookLib
+  SdDxeLib
+  ByteSwapLib
+
+
+[PcdsDynamic.common]
+  ## If TRUE, forces the driver to use SPI mode even if an SDHCI controller is available
+  gEfiSdCardDxeTokenSpaceGuid.PcdSdCardSpiOnlyMode    | FALSE | BOOLEAN | 0x00010001
+
+  ## SD card initialization timeout in milliseconds
+  gEfiSdCardDxeTokenSpaceGuid.PcdSdCardInitTimeoutMs  | 1000  | UINT32  | 0x00010002
+
+  ## Enable CRC16 checking for SD transfers
+  gEfiSdCardDxeTokenSpaceGuid.PcdSdCardCrc16Enable    | TRUE  | BOOLEAN | 0x00010003
+
+  ## Maximum SD block size supported by driver
+  gEfiSdCardDxeTokenSpaceGuid.PcdSdCardMaxBlockSize   | 512   | UINT32  | 0x00010004
+

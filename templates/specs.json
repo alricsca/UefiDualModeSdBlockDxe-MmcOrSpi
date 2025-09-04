@@ -1,0 +1,867 @@
+{
+  "project": {
+    "name": "SdSpiBlockDxe",
+    "goal": "Implement an EFI/UEFI driver that talks to SD/MMC cards over SPI mode and exposes them as EFI block devices consumable by existing EFI filesystem drivers (e.g., FAT/FAT32).",
+    "status": "design-spec",
+    "version": "1.0.0",
+    "targets": [
+      "UEFI DXE phase",
+      "EDK2 build system"
+    ],
+    "assumptions": [
+      "Platform provides an SPI controller (MMIO or IO) accessible in DXE.",
+      "Platform provides GPIOs for CS (chip-select), optional Card Detect (CD) and Write Protect (WP).",
+      "3.3V supply is available; no 5V to card.",
+      "Pull-up present on DO/MISO line; 10–100 kΩ typical."
+    ]
+  },
+  "hardware": {
+    "physical": {
+      "card_types": [
+        "MMC",
+        "SDSC",
+        "SDHC",
+        "SDXC",
+        "SDUC*"
+      ],
+      "notes": [
+        "MMC: 7 pads (4 effective signals).",
+        "SDC: 9 pads (6 effective signals).",
+        "SDUC may not support SPI mode per spec evolution; treat as best-effort."
+      ]
+    },
+    "power": {
+      "voltage_range_v": [
+        2.7,
+        3.6
+      ],
+      "typical_v": [
+        3.0,
+        3.3
+      ],
+      "absolute_no_v": 5.0,
+      "max_write_current_ma": 100,
+      "driver_actions": [
+        "Verify platform can source ≥100 mA at 3.3V.",
+        "Gate initialization until power good (≥2.2V) and 1 ms elapsed."
+      ]
+    },
+    "signals": {
+      "spi_lines": [
+        "SCLK",
+        "MOSI/DI",
+        "MISO/DO",
+        "CS"
+      ],
+      "aux_lines": [
+        "CD(optional)",
+        "WP(optional)"
+      ],
+      "pullups_required": [
+        "DO/MISO (cannot be omitted; some cards fail without it)"
+      ]
+    }
+  },
+  "spi_mode": {
+    "modes_supported": [
+      0,
+      3
+    ],
+    "recommended_mode": 0,
+    "cpha_cpol": {
+      "mode0": {
+        "CPHA": 0,
+        "CPOL": 0
+      },
+      "mode3": {
+        "CPHA": 1,
+        "CPOL": 1
+      }
+    },
+    "init_clock_hz": {
+      "min": 100000,
+      "max": 400000
+    },
+    "operational_clock_hz": {
+      "mmc_max": 20000000,
+      "sd_max": 25000000,
+      "note": "In SPI mode, clock can be fixed since no open-drain arbitration."
+    },
+    "cs_rules": [
+      "Drive CS low before each command frame; keep low for the entire transaction (command + response [+ data]).",
+      "Deassert CS high between commands."
+    ],
+    "read_transfer_rule": "During reads, host must clock by sending 0xFF bytes; DI kept high (0xFF)."
+  },
+  "protocol": {
+    "command_frame": {
+      "format": "Fixed-length 6-byte: [0x40|cmd, arg[31:24], arg[23:16], arg[15:8], arg[7:0], crc]",
+      "crc": {
+        "spi_crc_usage": "Disabled after entering SPI mode (except when enabled by CMD59).",
+        "mandatory": [
+          {
+            "cmd": "CMD0",
+            "crc": "0x95"
+          },
+          {
+            "cmd": "CMD8",
+            "crc": "0x87"
+          }
+        ]
+      },
+      "ncr_bytes": {
+        "sdc": [
+          0,
+          8
+        ],
+        "mmc": [
+          1,
+          8
+        ],
+        "host_action": "Read up to 8 bytes (sending 0xFF) until first non-0xFF response byte."
+      }
+    },
+    "responses": {
+      "types": {
+        "R1": "1 byte status; 0x00 = OK; bits indicate errors/idle.",
+        "R1b": "R1 followed by busy (DO low). Wait until DO high (read 0xFF).",
+        "R3": "R1 + 32-bit OCR.",
+        "R7": "R1 + 32-bit return (voltage check/pattern)."
+      }
+    },
+    "data_tokens": {
+      "read_single_start": "0xFE",
+      "write_single_start": "0xFE",
+      "write_multi_start": "0xFC",
+      "write_multi_stop": "0xFD",
+      "post_write_busy": "Card holds DO low while programming."
+    },
+    "block_len": {
+      "default": 512,
+      "note": "Some 2GB cards power-up with 1024; enforce 512 via CMD16 for FAT compatibility (SDSC).",
+      "high_capacity": "SDHC/SDXC use fixed 512-byte block addressing; CMD16 ignored."
+    }
+  },
+  "command_set": [
+    {
+      "idx": 0,
+      "abbr": "GO_IDLE_STATE",
+      "name": "CMD0",
+      "arg": 0,
+      "resp": "R1",
+      "data": "No",
+      "desc": "Software reset; enter SPI mode if CS low."
+    },
+    {
+      "idx": 1,
+      "abbr": "SEND_OP_COND",
+      "name": "CMD1",
+      "arg": 0,
+      "resp": "R1",
+      "data": "No",
+      "desc": "Initialize (MMC or fallback for SD)."
+    },
+    {
+      "idx": 41,
+      "abbr": "APP_SEND_OP_COND",
+      "name": "ACMD41",
+      "arg": "HCS(bit30) | 0",
+      "resp": "R1",
+      "data": "No",
+      "desc": "Initialize (preferred for SD)."
+    },
+    {
+      "idx": 8,
+      "abbr": "SEND_IF_COND",
+      "name": "CMD8",
+      "arg": "0x000001AA",
+      "resp": "R7",
+      "data": "No",
+      "desc": "SD V2+ presence/voltage check."
+    },
+    {
+      "idx": 58,
+      "abbr": "READ_OCR",
+      "name": "CMD58",
+      "arg": 0,
+      "resp": "R3",
+      "data": "No",
+      "desc": "Read OCR; check CCS(bit30)."
+    },
+    {
+      "idx": 59,
+      "abbr": "CRC_ON_OFF",
+      "name": "CMD59",
+      "arg": "0 (off) or 1 (on)",
+      "resp": "R1",
+      "data": "No",
+      "desc": "Enable/disable CRC in SPI mode."
+    },
+    {
+      "idx": 9,
+      "abbr": "SEND_CSD",
+      "name": "CMD9",
+      "arg": 0,
+      "resp": "R1",
+      "data": "Yes",
+      "desc": "Read CSD."
+    },
+    {
+      "idx": 10,
+      "abbr": "SEND_CID",
+      "name": "CMD10",
+      "arg": 0,
+      "resp": "R1",
+      "data": "Yes",
+      "desc": "Read CID."
+    },
+    {
+      "idx": 16,
+      "abbr": "SET_BLOCKLEN",
+      "name": "CMD16",
+      "arg": 512,
+      "resp": "R1",
+      "data": "No",
+      "desc": "Set block size (SDSC only)."
+    },
+    {
+      "idx": 17,
+      "abbr": "READ_SINGLE_BLOCK",
+      "name": "CMD17",
+      "arg": "addr",
+      "resp": "R1",
+      "data": "Yes",
+      "desc": "Read 512B block."
+    },
+    {
+      "idx": 18,
+      "abbr": "READ_MULTIPLE_BLOCK",
+      "name": "CMD18",
+      "arg": "addr",
+      "resp": "R1",
+      "data": "Yes",
+      "desc": "Read multiple blocks; stop via CMD12."
+    },
+    {
+      "idx": 12,
+      "abbr": "STOP_TRANSMISSION",
+      "name": "CMD12",
+      "arg": 0,
+      "resp": "R1b",
+      "data": "No",
+      "desc": "Stop multi-block read."
+    },
+    {
+      "idx": 24,
+      "abbr": "WRITE_BLOCK",
+      "name": "CMD24",
+      "arg": "addr",
+      "resp": "R1",
+      "data": "Yes",
+      "desc": "Write 512B block."
+    },
+    {
+      "idx": 25,
+      "abbr": "WRITE_MULTIPLE_BLOCK",
+      "name": "CMD25",
+      "arg": "addr",
+      "resp": "R1",
+      "data": "Yes",
+      "desc": "Write multiple blocks; stop token 0xFD."
+    },
+    {
+      "idx": 23,
+      "abbr": "SET_BLOCK_COUNT",
+      "name": "CMD23",
+      "arg": "count",
+      "resp": "R1",
+      "data": "No",
+      "desc": "MMC only; predefine multi-block count."
+    },
+    {
+      "idx": "ACMD23",
+      "abbr": "SET_WR_BLOCK_ERASE_COUNT",
+      "name": "ACMD23",
+      "arg": "pre-erase count",
+      "resp": "R1",
+      "data": "No",
+      "desc": "SD only; improve multi-block write."
+    },
+    {
+      "idx": 55,
+      "abbr": "APP_CMD",
+      "name": "CMD55",
+      "arg": 0,
+      "resp": "R1",
+      "data": "No",
+      "desc": "Prefix before ACMD<n>."
+    }
+  ],
+  "initialization_state_machine": {
+    "states": [
+      {
+        "id": "POWER_ON",
+        "actions": [
+          "Wait 1ms after ≥2.2V.",
+          "Set SPI freq 100–400 kHz.",
+          "Set DI and CS high.",
+          "Clock 80 dummy cycles (>= 74) by sending 10+ bytes of 0xFF."
+        ],
+        "transitions": [
+          {
+            "on": "done",
+            "to": "RESET_CMD0"
+          }
+        ]
+      },
+      {
+        "id": "RESET_CMD0",
+        "actions": [
+          "Assert CS low.",
+          "Send CMD0(arg=0, crc=0x95).",
+          "Poll response up to 8 bytes."
+        ],
+        "transitions": [
+          {
+            "on": "R1==0x01",
+            "to": "CHECK_V2_CMD8"
+          },
+          {
+            "on": "timeout_or_bad",
+            "to": "FAIL_NO_CARD"
+          }
+        ]
+      },
+      {
+        "id": "CHECK_V2_CMD8",
+        "actions": [
+          "Send CMD8(arg=0x000001AA, crc=0x87).",
+          "If R7 valid and (R7 & 0xFFF)==0x1AA, set card.ver='SDv2+' else set card.ver='SDv1/MMC'."
+        ],
+        "transitions": [
+          {
+            "on": "SDv2_plus",
+            "to": "INIT_ACMD41_HCS"
+          },
+          {
+            "on": "illegal_cmd_or_mmc",
+            "to": "INIT_LEGACY_CMD1_OR_ACMD41"
+          }
+        ]
+      },
+      {
+        "id": "INIT_LEGACY_CMD1_OR_ACMD41",
+        "actions": [
+          "Try ACMD41(HCS=0). If rejected, use CMD1().",
+          "Loop: issue command every 10–20 ms; expect R1 to clear idle (0x00) within timeout (e.g., 1s)."
+        ],
+        "transitions": [
+          {
+            "on": "R1==0x00",
+            "to": "POST_INIT_SETUP"
+          },
+          {
+            "on": "timeout",
+            "to": "FAIL_INIT_TIMEOUT"
+          }
+        ]
+      },
+      {
+        "id": "INIT_ACMD41_HCS",
+        "actions": [
+          "Loop: CMD55 + ACMD41(arg=HCS bit30 set).",
+          "Wait until R1==0x00 or timeout."
+        ],
+        "transitions": [
+          {
+            "on": "R1==0x00",
+            "to": "READ_OCR_AND_CLASSIFY"
+          },
+          {
+            "on": "timeout",
+            "to": "FAIL_INIT_TIMEOUT"
+          }
+        ]
+      },
+      {
+        "id": "READ_OCR_AND_CLASSIFY",
+        "actions": [
+          "Send CMD58; read OCR.",
+          "If OCR.voltage_ok==false, fail.",
+          "If OCR.CCS(bit30)==1 => high_capacity=TRUE (SDHC/SDXC), addressing=LBA (512-byte fixed). Else addressing=byte."
+        ],
+        "transitions": [
+          {
+            "on": "done",
+            "to": "POST_INIT_SETUP"
+          }
+        ]
+      },
+      {
+        "id": "POST_INIT_SETUP",
+        "actions": [
+          "Raise SPI clock to operational (≤25 MHz SD, ≤20 MHz MMC).",
+          "If not high_capacity: send CMD16(512).",
+          "Read CSD via CMD9; parse capacity and speed.",
+          "Optionally read CID via CMD10."
+        ],
+        "transitions": [
+          {
+            "on": "done",
+            "to": "READY"
+          }
+        ]
+      },
+      {
+        "id": "READY",
+        "actions": [
+          "Expose Block I/O; media present; compute LastBlock from CSD/CCS."
+        ],
+        "transitions": [
+          {
+            "on": "card_removed",
+            "to": "POWER_ON"
+          }
+        ]
+      },
+      "FAIL_NO_CARD",
+      "FAIL_INIT_TIMEOUT"
+    ],
+    "timeouts_ms": {
+      "ncr_read_resp": 8,
+      "init_poll_interval": 10,
+      "init_total": 1000,
+      "post_write_busy_max": 600
+    }
+  },
+  "block_device_api": {
+    "uefi_protocols_produced": [
+      "EFI_BLOCK_IO_PROTOCOL",
+      "EFI_BLOCK_IO2_PROTOCOL (optional for async)",
+      "EFI_COMPONENT_NAME2_PROTOCOL",
+      "EFI_DRIVER_BINDING_PROTOCOL",
+      "EFI_DEVICE_PATH_PROTOCOL (for the child handle/card)"
+    ],
+    "uefi_protocols_consumed": [
+      "SPI host abstraction protocol (platform-specific or custom)",
+      "GPIO protocol (optional for CD/WP)",
+      "Timer/CPU architectural protocol (for Stall())",
+      "HII (optional, for config)",
+      "ResetSystem or power control (optional)"
+    ],
+    "block_io_media_fields": {
+      "RemovableMedia": true,
+      "MediaPresent": "Reflect CD pin or successful card init.",
+      "LogicalPartition": false,
+      "ReadOnly": "From WP signal if available; otherwise false.",
+      "WriteCaching": false,
+      "BlockSize": 512,
+      "IoAlign": "Match SPI DMA alignment; at least 1; prefer power-of-two (e.g., 4, 8, 16).",
+      "LastBlock": "Computed from capacity - 1 (0-based LBA).",
+      "MediaId": "Increment on re-initialization/insert."
+    },
+    "read_write_rules": [
+      "Reads: CMD17/CMD18. For CMD18, stop with CMD12 (R1b).",
+      "Writes: CMD24/CMD25. For CMD25, send 0xFC per block and end with 0xFD, then poll busy.",
+      "High-capacity: address = LBA (block addressing).",
+      "SDSC/MMC legacy: address = byte = LBA * 512."
+    ],
+    "partition_and_fs_integration": [
+      "DiskIoDxe/GptDxe will stack automatically on Block I/O; ensure Media fields correct.",
+      "Fv/Fat drivers need only a correct 512-byte sector interface; do not implement filesystem here."
+    ]
+  },
+  "efi_driver_design": {
+    "driver_binding": {
+      "Supported()": "Match to platform SPI host controller and/or a parent 'SD-SPI bus' controller.",
+      "Start()": [
+        "Instantiate a child for the card slot.",
+        "Power-on and run init state machine.",
+        "Install Block IO (+Device Path) on the child if MediaPresent."
+      ],
+      "Stop()": [
+        "Uninstall protocols, power down card if possible."
+      ]
+    },
+    "device_path": {
+      "parent": "SPI controller path node (hardware/vendor).",
+      "child_node": {
+        "type": "MessagingDevicePath (Vendor-defined for SPI-SD)",
+        "fields": [
+          "Controller CS pin",
+          "Bus number",
+          "MaxHz"
+        ]
+      }
+    },
+    "tpl_and_events": [
+      "Long operations must not hold TPL > TPL_CALLBACK.",
+      "Use gBS->Stall() for short waits; use event/timer for longer polls.",
+      "Signal media change by uninstalling/reinstalling Block I/O or updating MediaId."
+    ],
+    "hotplug": [
+      "If CD GPIO available, register GPIO interrupt => ReconnectController().",
+      "If not, implement slow polling timer (e.g., 500 ms) gated behind PCD for platforms that need it."
+    ],
+    "timeouts_and_watchdog": [
+      "Use conservative init timeout (up to 1s).",
+      "During multi-block writes, respect busy up to ~600 ms per block for worst-case.",
+      "Feed/disable watchdog as per platform policy during long writes (avoid unintended resets)."
+    ],
+    "dma_and_alignment": [
+      "SPI often PIO; if DMA available, respect alignment via Media.IoAlign.",
+      "Handle unaligned buffers: copy to bounce buffer aligned to IoAlign, then transfer."
+    ],
+    "cache_and_flush": [
+      "No controller cache; ensure writes complete by waiting for busy release.",
+      "Implement BlockIo->FlushBlocks() as a no-op that returns success after any outstanding busy cleared."
+    ],
+    "error_mapping": {
+      "sd_error_to_efi_status": {
+        "CRC_ERROR": "EFI_CRC_ERROR",
+        "ILLEGAL_COMMAND": "EFI_UNSUPPORTED",
+        "OUT_OF_RANGE": "EFI_BAD_BUFFER_SIZE",
+        "CARD_IS_LOCKED": "EFI_WRITE_PROTECTED",
+        "CARD_NOT_READY": "EFI_NOT_READY",
+        "ADDRESS_ERROR": "EFI_INVALID_PARAMETER",
+        "GENERAL_ERROR": "EFI_DEVICE_ERROR"
+      },
+      "Timeouts": "=> EFI_TIMEOUT.",
+      "CRC/data token errors": "=> EFI_DEVICE_ERROR.",
+      "Addressing beyond LastBlock": "=> EFI_INVALID_PARAMETER.",
+      "Card removed mid-op": "=> EFI_NO_MEDIA + MediaPresent=false."
+    },
+    "mode_fallback_strategy": {
+      "description": "If host mode initialization fails but SPI protocol is available, consider automatic fallback to increase robustness",
+      "conditions": [
+        "Host mode init fails with CRC_ERROR or GENERAL_ERROR",
+        "SPI protocol is present on controller",
+        "No hardware limitations preventing mode switching"
+      ],
+      "implementation": "Optional fallback logic in SdCardDriverBindingStart after initial mode detection"
+    },
+    "thread_safety": "Serialize SPI access per slot with a lock; Block I/O 2 async requests should queue and run in-order per device."
+  },
+  "file_map": [
+    {
+      "name": "SdCardDxe.c",
+      "role": "Driver entry point and EFI_DRIVER_BINDING_PROTOCOL implementation.",
+      "spec_refs": ["protocols", "uefi_build", "driver_binding"],
+      "actions": [
+        "TODO: In DriverBinding.Supported, invoke SdCardProbeMode to determine if either MMC or SPI is supported. The current implementation only checks for SPI.",
+        "TODO: In DriverBinding.Start, use the result from SdCardProbeMode to select the appropriate initialization path (MMC or SPI).",
+        "TODO: In DriverBinding.Stop, ensure that resources for both MMC and SPI modes are properly released."
+      ]
+    },
+    {
+      "name": "SdCardDxe.inf",
+      "role": "EDK2 module information file.",
+      "spec_refs": ["uefi_build"],
+      "actions": [
+        "Verify that `SpiLib` and `HostIo` are included in the `[LibraryClasses]` section.",
+        "Add `gEfiSpiHcProtocolGuid` and `gEfiSdhcProtocolGuid` to the `[Protocols]` section.",
+        "Add `gSdCardDxePcdSpiOnlyMode` to the `[Pcd]` section."
+      ]
+    },
+    {
+      "name": "SdCardDxe.dsc",
+      "role": "Module description file for the driver.",
+      "spec_refs": ["uefi_build"],
+      "actions": [
+        "TODO: Validate that the build options in the `[Defines]` section are correct.",
+        "TODO: Ensure that the necessary components for both SPI and MMC modes are included in the `[Components]` section."
+      ]
+    },
+    {
+      "name": "SdCardBlockIo.h",
+      "role": "Common header with SD card constants, command definitions, and data structures.",
+      "spec_refs": ["command_set", "protocol_framing", "capacity_and_csd_parsing"],
+      "actions": [
+        "TODO: Add definitions for all SD commands (CMD0-CMD63), including command format, arguments, and response types.",
+        "TODO: Add structures for CSD, CID, and SCR registers.",
+        "TODO: Define constants for different card states and status bits."
+      ]
+    },
+    {
+      "name": "SdCardBlockIo.c",
+      "role": "Implementation of the EFI_BLOCK_IO_PROTOCOL.",
+      "spec_refs": ["block_device_exposure", "read_write_operations", "addressing_rules"],
+      "actions": [
+        "TODO: In `SdCardBlockIoReadBlocks`, implement logic to translate block addresses to byte addresses and issue the appropriate SD command (READ_SINGLE_BLOCK or READ_MULTIPLE_BLOCK).",
+        "TODO: In `SdCardBlockIoWriteBlocks`, implement logic for writing blocks.",
+        "TODO: In `SdCardBlockIoFlushBlocks`, ensure that any cached data is written to the card.",
+        "TODO: Update MediaId on card re-initialization or hotplug events."
+      ]
+    },
+    {
+      "name": "SdCardMedia.c",
+      "role": "Handles card detection, initialization, and media status.",
+      "spec_refs": ["initialization_state_machine", "hotplug_and_media_change"],
+      "actions": [
+        "TODO: Implement the full SD card initialization state machine, including CMD0 (GO_IDLE_STATE), CMD8 (SEND_IF_COND), ACMD41 (SD_SEND_OP_COND), and CMD2 (ALL_SEND_CID).",
+        "TODO: Add logic to detect card removal and insertion (hotplug).",
+        "TODO: Implement a function to periodically check the card status."
+      ]
+    },
+    {
+      "name": "SpiSdCard.c",
+      "role": "SPI mode-specific command and data transfer handling.",
+      "spec_refs": ["spi_mode", "spi_host_abstraction", "protocol_framing"],
+      "actions": [
+        "TODO: Implement `SdCardSendCommandSpi` to send a command and receive a response over the SPI bus.",
+        "TODO: Implement logic for handling NCR (Number of Commands to wait) timing.",
+        "TODO: Implement data block transfers (read and write) with correct start/stop tokens and CRC."
+      ]
+    },
+    {
+      "name": "SpiLib.c",
+      "role": "Higher-level SPI abstraction library.",
+      "spec_refs": ["spi_host_abstraction"],
+      "actions": [
+        "TODO: Implement `SpiTransferByte` and `SpiTransferBuffer` to wrap the low-level `EfiSpiHcProtocol`.",
+        "TODO: Add functions for asserting and deasserting the chip select (CS) line."
+      ]
+    },
+    {
+      "name": "SpiIo.c",
+      "role": "Low-level SPI I/O functions.",
+      "spec_refs": ["spi_mode"],
+      "actions": [
+        "TODO: Implement the `EfiSpiHcProtocol` interface to communicate with the platform's SPI host controller.",
+        "TODO: Handle SPI clock frequency and mode selection."
+      ]
+    },
+    {
+      "name": "HostIo.c",
+      "role": "SDHCI (MMC) host I/O abstraction.",
+      "spec_refs": ["protocols", "command_set"],
+      "actions": [
+        "TODO: Implement the `EfiSdhcProtocol` interface to communicate with the platform's SDHCI host controller.",
+        "TODO: Implement functions to send commands and transfer data in MMC mode."
+      ]
+    },
+    {
+      "name": "DriverLib.c",
+      "role": "Shared helper functions.",
+      "spec_refs": ["error_mapping", "capacity_and_csd_parsing"],
+      "actions": [
+        "TODO: Implement `SdCardIsHighCapacityFromOcr` to check the CCS bit in the OCR register.",
+        "TODO: Implement a function to parse the CSD register and extract card capacity and other parameters.",
+        "TODO: Implement CRC7 and CRC16 calculation functions."
+      ]
+    },
+    {
+      "name": "SdCardMode.c",
+      "role": "Mode selection shim for MMC-host vs SPI.",
+      "spec_refs": ["spi_mode", "protocols"],
+      "actions": [
+        "Implement `SdCardProbeMode` helper that returns `SdCardModeMmcHost` or `SdCardModeSpi` based on the presence of `EfiSdhcProtocol` or `EfiSpiHcProtocol` and the `gSdCardDxePcdSpiOnlyMode` PCD."
+      ]
+    },
+    {
+      "name": "tests/README-tests.md",
+      "role": "Test plan and documentation.",
+      "spec_refs": ["acceptance_tests"],
+      "actions": [
+        "TODO: Add detailed test cases for SPI-only mode, MMC-only mode, and dual-mode (auto-detection).",
+        "TODO: Describe the test environment setup, including hardware and software requirements.",
+        "TODO: Add a section on how to interpret test results and troubleshoot common issues."
+      ]
+    }
+  ],
+  "helpers_to_implement": [
+    {
+      "name": "SdCardIsHighCapacityFromOcr",
+      "signature": "BOOLEAN SdCardIsHighCapacityFromOcr(UINT32 Ocr)",
+      "description": "Checks the Card Capacity Status (CCS) bit in the OCR register to determine if the card is a high-capacity card (SDHC/SDXC)."
+    },
+    {
+      "name": "SdCardPackCommand",
+      "signature": "VOID SdCardPackCommand(UINT8 Cmd, UINT32 Arg, UINT8 Crc, UINT8 *Buffer)",
+      "description": "Packs an SD command, argument, and CRC into a 6-byte buffer ready for transmission."
+    },
+    {
+      "name": "SdCardSendCommandSpi",
+      "signature": "EFI_STATUS SdCardSendCommandSpi(EFI_SPI_HC_PROTOCOL *Spi, UINT8 Cmd, UINT32 Arg, UINT8 Crc, UINT8 *Response, UINTN ResponseLength)",
+      "description": "Sends a command to the SD card in SPI mode and receives the response."
+    },
+    {
+      "name": "SdCardProbeMode",
+      "signature": "SD_CARD_MODE SdCardProbeMode(EFI_HANDLE ControllerHandle, BOOLEAN ForceSpi)",
+      "description": "Probes for available host controller protocols (SDHCI and SPI) and returns the appropriate mode. Can be forced to SPI mode."
+    },
+    "SdCardMapSdErrorToEfiStatus(UINT32 SdError)",
+    "SdCardHandleModeFallback(SD_CARD_PRIVATE_DATA *Private, EFI_STATUS InitializationStatus)"
+  ],
+  "capacity_and_csd_parsing": {
+    "sdc_v1_sdsC": {
+      "compute": "Capacity = (C_SIZE+1) * 2^(C_SIZE_MULT+2) * 2^READ_BL_LEN bytes; then convert to blocks of 512."
+    },
+    "sdhc_sdxc": {
+      "compute": "Capacity = (C_SIZE+1) * 512 KB; block size fixed 512."
+    },
+    "mmc": {
+      "note": "MMC over SPI supported similarly; clock ≤20 MHz; consider CMD23 semantics for multi-block."
+    }
+  },
+  "gotchas_and_caveats": [
+    "Some cards require a strong pull-up on DO; missing pull-up causes init hangs.",
+    "Keep CS asserted for the entirety of a command/response/data transaction; deasserting early can abort or desync.",
+    "After CMD12 (R1b), always wait for DO to go high before the next command.",
+    "Always issue ≥74 initial clocks with DI and CS high; fewer can fail on some cards.",
+    "Use exact CRC for CMD0 (0x95) and CMD8 (0x87), even though CRC is otherwise off.",
+    "On SDSC (byte addressing), always multiply LBA*512 when forming the address for CMD17/24; do NOT do this for SDHC/SDXC.",
+    "Some 2GB cards power-up with 1024B block; must set 512 via CMD16.",
+    "Max SPI clock: many cards tolerate 25 MHz; validate signal integrity (rise time, ringing) or you’ll see sporadic data token/CRC errors.",
+    "MicroSD lacks reliable mechanical WP; don’t force ReadOnly unless platform asserts it.",
+    "Busy after write: cards may hold DO low for hundreds of ms; don’t spin at high TPL—use timed polls.",
+    "SDUC (≥4TB) via SPI may be unsupported due to 38-bit LBA; fail gracefully with EFI_UNSUPPORTED if detected."
+  ],
+  "spi_host_abstraction": {
+    "required_ops": [
+      "Configure(mode, freq_hz, bit_order_msb_first=true)",
+      "AssertCs()",
+      "DeassertCs()",
+      "Transfer(tx_byte) -> rx_byte (full-duplex, blocking)",
+      "TransferBuffer(tx_ptr, rx_ptr, len)",
+      "StallMicroseconds(us)"
+    ],
+    "nice_to_have": [
+      "SetFrequency(freq_hz)",
+      "IsCardPresent()",
+      "IsWriteProtected()"
+    ]
+  },
+  "block_operations": {
+    "read_blocks": {
+      "single": "CMD17(addr); wait for 0xFE; read 512 bytes; read 2-byte CRC; ignore unless CRC-on.",
+      "multi": "CMD18(addr); loop blocks; each block starts with 0xFE; stop with CMD12 and wait R1b busy."
+    },
+    "write_blocks": {
+      "single": "CMD24(addr); send 0xFE; send 512 bytes; send 2-byte CRC (dummy ok); poll busy until 0xFF.",
+      "multi": "CMD25(addr); for each block: 0xFC + 512 bytes + 2-byte CRC; end with 0xFD; poll busy; optionally use ACMD23 pre-erase."
+    },
+    "retry_policy": {
+      "read": {
+        "max_retries": 3,
+        "backoff_ms": [
+          0,
+          5,
+          20
+        ]
+      },
+      "write": {
+        "max_retries": 2,
+        "backoff_ms": [
+          5,
+          50
+        ]
+      }
+    }
+  },
+  "uefi_media_change_flow": {
+    "on_insert": [
+      "Run initialization_state_machine.",
+      "If success: set MediaPresent=true; MediaId++ ; install/refresh Block I/O."
+    ],
+    "on_remove": [
+      "Abort in-flight I/O with EFI_NO_MEDIA; MediaPresent=false; MediaId++."
+    ]
+  },
+  "security_and_safety": {
+    "voltage_protection": "Never drive 5V to the socket.",
+    "esd": "Platform should provide ESD protection on SPI lines.",
+    "input_sanitization": "Validate LBA/count against LastBlock.",
+    "watchdog": "Pet/disable during long multi-block writes as per platform policy."
+  },
+  "logging_and_diagnostics": {
+    "verbosity_levels": [
+      "ERROR",
+      "WARN",
+      "INFO",
+      "TRACE"
+    ],
+    "key_events": [
+      "Init sequence steps and responses (R1/R3/R7).",
+      "Card classification (SDSC/SDHC/SDXC/MMC), capacity.",
+      "Clock changes, timeouts, retries.",
+      "Media present/absent transitions."
+    ]
+  },
+  "test_matrix": {
+    "card_mix": [
+      "SDSC 1GB",
+      "SDSC 2GB (block=1024 on power-up)",
+      "SDHC 8/32GB",
+      "SDXC 64/512GB",
+      "MMC legacy"
+    ],
+    "spi_speeds": [
+      "400 kHz init",
+      "10 MHz",
+      "20 MHz",
+      "25 MHz (SD)"
+    ],
+    "ops": [
+      "Random single-block R/W",
+      "Sequential multi-block R/W",
+      "FS create/expand/delete",
+      "Hotplug while idle",
+      "Hotplug during write (expect error handling)"
+    ],
+    "uefi_stack": [
+      "GPT partitioning",
+      "FAT32 mount via existing SimpleFileSystem on top of your Block I/O"
+    ]
+  },
+  "pseudocode_snippets": {
+    "send_cmd": "function SendCmd(cmd, arg, crc): AssertCs(); xfer(0x40 | cmd); xfer(arg>>24); xfer(arg>>16); xfer(arg>>8); xfer(arg); xfer(crc); for i in 0..7: r=xfer(0xFF); if (r != 0xFF) return r; return TIMEOUT;",
+    "read_data_block": "wait token!=0xFF up to t; if token!=0xFE: return ERR; read 512 bytes; read 2-byte CRC; return OK;",
+    "write_data_block": "xfer(start_token); write 512 bytes; write 2-byte CRC; poll busy (xfer 0xFF until 0xFF) with timeout;"
+  },
+  "uefi_build": {
+    "packages": [
+      "MdePkg",
+      "MdeModulePkg"
+    ],
+    "library_classes": [ "UefiDriverEntryPoint",
+  "UefiLib",
+  "BaseLib",
+  "BaseMemoryLib",
+  "MemoryAllocationLib",
+  "DebugLib",
+  "TimerLib",
+  "UefiBootServicesTableLib",
+  "DevicePathLib",
+  "BaseCryptLib (optional, if CRC calc generic)"
+],
+"ppis_protocols": [
+  "gEfiSpiHcProtocolGuid",
+  "gEfiSdhcProtocolGuid",
+  "gEfiGpioProtocolGuid"
+],
+"dsc_fdf": [
+  "Add INF for SdSpiBlockDxe in [Components].",
+  "Ensure SPI/GPIO drivers load before."
+],
+"pcds": [
+  {
+    "name": "gEfiSdCardDxeTokenSpaceGuid.PcdSdCardSpiOnlyMode",
+    "type": "BOOLEAN",
+    "description": "If TRUE, forces the driver to use SPI mode even if an SDHCI controller is available."
+  }
+]
+},
+"efi_integration_notes": [
+"You do NOT implement a filesystem. Expose a correct 512-byte block device; GptDxe will detect partitions; FatDxe will mount if a FAT FS exists.",
+"Set Media.LogicalPartition=false for the raw device; partition driver will create child handles for partitions with LogicalPartition=true.",
+"Keep Media.IoAlign consistent with SPI engine; mismatches cause DiskIoDxe to bounce-copy (performance hit).",
+"Update MediaId whenever card is re-initialized to invalidate higher-layer caches."
+],
+"performance_tips": [
+"Prefer multi-block operations (CMD18/CMD25) to reduce per-command overhead.",
+"Increase SPI clock gradually after init; verify stability at target speed.",
+"Use ACMD23 before multi-block writes on SD to reduce erase overhead.",
+"Batch BlockIo2 asynchronous requests into multi-block sequences when contiguous."
+]
+}

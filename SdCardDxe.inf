@@ -1,0 +1,53 @@
+[Defines]
+  INF_VERSION                    = 0x00010005
+  BASE_NAME                      = SdCardDxe
+  FILE_GUID                      = 0F1E2D3C-4B5A-6978-8F90-AABBCCDDEFF0
+  MODULE_TYPE                    = UEFI_DRIVER
+  VERSION_STRING                 = 1.0
+  ENTRY_POINT                    = SdCardDxeEntryPoint
+  UNLOAD_IMAGE                   = SdCardDxeUnload
+
+[Sources]
+  SdCardDxe.c
+  SdCardMedia.c
+  SdCardBlockIo.c
+  SdCardMode.c
+  HostIo.c
+  SpiIo.c
+  SpiLib.c
+  DriverLib.c
+  
+[Packages]
+  MdePkg/MdePkg.dec
+  MdeModulePkg/MdeModulePkg.dec
+  ../../SdCardDxe/SdCardDxe.dec
+
+[LibraryClasses]
+  UefiDriverEntryPoint
+  UefiLib
+  BaseLib
+  BaseMemoryLib
+  MemoryAllocationLib
+  DebugLib
+  TimerLib
+  UefiBootServicesTableLib
+  DevicePathLib
+  PcdLib
+  ByteSwapLib
+  PcdLib
+  
+[Protocols]
+  gEfiSpiHcProtocolGuid
+  gEfiSdMmcPassThruProtocolGuid
+  gEfiBlockIoProtocolGuid
+  gEfiDevicePathProtocolGuid
+  gEfiComponentName2ProtocolGuid
+
+[Pcd]
+  gEfiSdCardDxeTokenSpaceGuid.PcdSdCardSpiOnlyMode
+
+[Guids]
+  gEfiSdCardDxeTokenSpaceGuid
+
+[Depex]
+  gEfiSpiHcProtocolGuid OR gEfiSdMmcPassThruProtocolGuid
