@@ -9,6 +9,64 @@
 #include <Protocol/SdMmcPassThru.h>
 #include <Protocol/SpiHc.h>
 
+// Use these standardized implementations instead of multiple versions
+/**
+  Calculates CRC7 for SD card commands.
+  Polynomial: x^7 + x^3 + 1 (0x89)
+**/
+UINT8
+EFIAPI
+SdCardCalculateCrc7 (
+  IN CONST UINT8  *Data,
+  IN UINTN        Length
+  )
+{
+  UINT8 Crc = 0;
+  UINTN i, j;
+
+  for (i = 0; i < Length; i++) {
+    Crc ^= Data[i];
+    for (j = 0; j < 8; j++) {
+      if (Crc & 0x80) {
+        Crc = (UINT8)((Crc << 1) ^ 0x89);
+      } else {
+        Crc = (UINT8)(Crc << 1);
+      }
+    }
+  }
+
+  // SD protocol requires CRC7 shifted left by 1 with stop bit
+  return (Crc << 1) | 0x01;
+}
+
+/**
+  Calculates CRC16 for SD card data blocks.
+  Polynomial: x^16 + x^12 + x^5 + 1 (0x1021)
+**/
+UINT16
+EFIAPI
+SdCardCalculateCrc16 (
+  IN CONST UINT8  *Data,
+  IN UINTN        Length
+  )
+{
+  UINT16 Crc = 0;
+  UINTN i, j;
+
+  for (i = 0; i < Length; i++) {
+    Crc ^= (UINT16)Data[i] << 8;
+    for (j = 0; j < 8; j++) {
+      if (Crc & 0x8000) {
+        Crc = (UINT16)((Crc << 1) ^ 0x1021);
+      } else {
+        Crc = (UINT16)(Crc << 1);
+      }
+    }
+  }
+
+  return Crc;
+}
+
 /**
   Checks the Card Capacity Status (CCS) bit in the OCR register.
   @param[in] Ocr  OCR register value

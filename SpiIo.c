@@ -15,86 +15,78 @@ EFI_STATUS EFIAPI SdCardWaitNotBusySpi (IN SD_CARD_PRIVATE_DATA *Private);
 EFI_STATUS EFIAPI SdCardReadDataBlockSpi (IN SD_CARD_PRIVATE_DATA *Private, IN UINTN Length, OUT UINT8 *Buffer);
 EFI_STATUS EFIAPI SdCardWriteDataBlockSpi (IN SD_CARD_PRIVATE_DATA *Private, IN UINT8 Token, IN UINTN Length, IN CONST UINT8 *Buffer);
 
-/**
-  Calculates CRC16 for SD card data blocks.
-  Polynomial: x^16 + x^12 + x^5 + 1 (0x1021)
-**/
-UINT16
-CalculateCrc16 (
-  IN CONST UINT8 *Data,
-  IN UINTN       Length
-  )
-{
-  UINT16 Crc = 0;
-  UINTN i, j;
-
-  for (i = 0; i < Length; i++) {
-    Crc ^= (UINT16)Data[i] << 8;
-    for (j = 0; j < 8; j++) {
-      if (Crc & 0x8000) {
-        Crc = (UINT16)((Crc << 1) ^ 0x1021);
-      } else {
-        Crc = (UINT16)(Crc << 1);
-      }
-    }
-  }
-
-  return Crc;
-}
-
-/**
-  Calculates CRC7 for SD card commands.
-  Note this is not in the EDK2 CRC library.
-  Polynomial: x^7 + x^3 + 1 (0x89)
-
-  @param[in]  Data    Pointer to the input data buffer.
-  @param[in]  Length  Number of bytes in the buffer.
-
-  @retval CRC7 value with SD protocol formatting.
-**/
-UINT8
-EFIAPI
-CalculateCrc7 (
-  IN CONST UINT8  *Data,
-  IN UINTN        Length
-  )
-{
-  UINT8 Crc = 0;
-  UINTN i, j;
-
-  for (i = 0; i < Length; i++) {
-    Crc ^= Data[i];
-    for (j = 0; j < 8; j++) {
-      if (Crc & 0x80) {
-        Crc = (UINT8)((Crc << 1) ^ 0x89); // Polynomial x^7 + x^3 + 1
-      } else {
-        Crc = (UINT8)(Crc << 1);
-      }
-    }
-  }
-
-  //
-  // SD specification requires the CRC7 to be shifted and ORed with stop bit.
-  // Shift right by 1 and set MSB to 1.
-  //
-  return (UINT8)((Crc >> 1) | 0x80);
-}
-
-/**
-  Calculates CRC16 for SD card data blocks.
-
-  Polynomial: x^16 + x^12 + x^5 + 1 (0x1021)
-
-  @param[in]  Data    Pointer to the input data buffer.
-  @param[in]  Length  Number of bytes in the buffer.
-
-  @retval CRC16 value.
-**/
-
 // =============================================================================
 // SPI I/O Functions
 // =============================================================================
+/**
+  SPI mode read/write function.
+**/
+EFI_STATUS
+EFIAPI
+SdCardExecuteReadWriteSpi (
+  IN  SD_CARD_PRIVATE_DATA  *Private,
+  IN  EFI_LBA               Lba,
+  IN  UINTN                 BufferSize,
+  IN OUT  VOID                  *Buffer,
+  IN  BOOLEAN               IsWrite
+  )
+{
+  EFI_STATUS Status = EFI_SUCCESS;
+  UINTN BlockCount = BufferSize / SD_BLOCK_SIZE;
+  UINT8 *CurrentBuffer = (UINT8*)Buffer;
+  UINT8 Response;
+  UINT32 Address;
 
+  Address = (Private->CardType == CARD_TYPE_SD_V2_HC) ? (UINT32)Lba : (UINT32)(Lba * SD_BLOCK_SIZE);
+
+  if (BlockCount > 1) {
+    // Multi-block
+    UINT8 Command = IsWrite ? CMD25 : CMD18;
+    Status = SdCardSendCommandSpi(Private, Command, Address, &Response);
+    if (EFI_ERROR(Status) || (Response & 0x80) != 0) {
+      return EFI_DEVICE_ERROR;
+    }
+
+    for (UINTN i = 0; i < BlockCount; i++) {
+      if (IsWrite) {
+        Status = SdCardWriteDataBlockSpi(Private, DATA_TOKEN_WRITE_MULTI, SD_BLOCK_SIZE, CurrentBuffer);
+      } else {
+        Status = SdCardReadDataBlockSpi(Private, SD_BLOCK_SIZE, CurrentBuffer);
+      }
+      if (EFI_ERROR(Status)) {
+        break;
+      }
+      CurrentBuffer += SD_BLOCK_SIZE;
+    }
+
+    if (IsWrite) {
+      // stop transmission token for multi-write
+      UINT8 StopToken = DATA_TOKEN_WRITE_MULTI_STOP;
+      SpiTransferBuffer(Private, &StopToken, NULL, 1);
+      Status = SdCardWaitNotBusySpi(Private);
+    } else {
+      if (EFI_ERROR(Status)) {
+        // Attempt to stop transmission on card
+        SdCardSendCommandSpi(Private, CMD12, 0, &Response);
+      }
+    }
+  } else {
+    // Single block
+    UINT8 Command = IsWrite ? CMD24 : CMD17;
+    Status = SdCardSendCommandSpi(Private, Command, Address, &Response);
+    if (EFI_ERROR(Status) || (Response & 0x80) != 0) {
+      return EFI_DEVICE_ERROR;
+    }
+
+    if (IsWrite) {
+      Status = SdCardWriteDataBlockSpi(Private, DATA_TOKEN_WRITE_SINGLE, SD_BLOCK_SIZE, CurrentBuffer);
+    } else {
+      Status = SdCardReadDataBlockSpi(Private, SD_BLOCK_SIZE, CurrentBuffer);
+    }
+  }
+
+  return Status;
+}
 /**
   Initializes the SD card in SPI mode.
 **/
@@ -113,10 +105,13 @@ SdCardInitializeSpi (
   Private->IsInitialized = FALSE;
   Private->BlockMedia.MediaPresent = FALSE;
 
-  // Send 80 dummy clocks (10 bytes @ 0xFF) while CS deasserted
-  UINT8 DummyClocks[10];
-  SetMem(DummyClocks, sizeof(DummyClocks), 0xFF);
-  SpiTransferBuffer(Private, DummyClocks, NULL, sizeof(DummyClocks));
+// Add to SdCardInitializeSpi() before CMD0
+// Send 80+ dummy clocks with CS deasserted and DI/MOSI high
+UINT8 dummyClocks[10];
+SetMem(dummyClocks, sizeof(dummyClocks), 0xFF);
+SpiDeassertCs(Private);
+SpiTransferBuffer(Private, dummyClocks, NULL, sizeof(dummyClocks));
+SpiAssertCs(Private);
 
   // CMD0: Reset card to SPI mode
   Status = SdCardSendCommandSpi(Private, CMD0, 0, &Response);
@@ -215,75 +210,7 @@ SdCardInitializeSpi (
   return EFI_SUCCESS;
 }
 
-/**
-  SPI mode read/write function.
-**/
-EFI_STATUS
-EFIAPI
-SdCardExecuteReadWriteSpi (
-  IN  SD_CARD_PRIVATE_DATA  *Private,
-  IN  EFI_LBA               Lba,
-  IN  UINTN                 BufferSize,
-  IN  VOID                  *Buffer,
-  IN  BOOLEAN               IsWrite
-  )
-{
-  EFI_STATUS Status = EFI_SUCCESS;
-  UINTN BlockCount = BufferSize / SD_BLOCK_SIZE;
-  UINT8 *CurrentBuffer = (UINT8*)Buffer;
-  UINT8 Response;
-  UINT32 Address;
 
-  Address = (Private->CardType == CARD_TYPE_SD_V2_HC) ? (UINT32)Lba : (UINT32)(Lba * SD_BLOCK_SIZE);
-
-  if (BlockCount > 1) {
-    // Multi-block
-    UINT8 Command = IsWrite ? CMD25 : CMD18;
-    Status = SdCardSendCommandSpi(Private, Command, Address, &Response);
-    if (EFI_ERROR(Status) || (Response & 0x80) != 0) {
-      return EFI_DEVICE_ERROR;
-    }
-
-    for (UINTN i = 0; i < BlockCount; i++) {
-      if (IsWrite) {
-        Status = SdCardWriteDataBlockSpi(Private, DATA_TOKEN_WRITE_MULTI, SD_BLOCK_SIZE, CurrentBuffer);
-      } else {
-        Status = SdCardReadDataBlockSpi(Private, SD_BLOCK_SIZE, CurrentBuffer);
-      }
-      if (EFI_ERROR(Status)) {
-        break;
-      }
-      CurrentBuffer += SD_BLOCK_SIZE;
-    }
-
-    if (IsWrite) {
-      // stop transmission token for multi-write
-      UINT8 StopToken = DATA_TOKEN_WRITE_MULTI_STOP;
-      SpiTransferBuffer(Private, &StopToken, NULL, 1);
-      Status = SdCardWaitNotBusySpi(Private);
-    } else {
-      if (EFI_ERROR(Status)) {
-        // Attempt to stop transmission on card
-        SdCardSendCommandSpi(Private, CMD12, 0, &Response);
-      }
-    }
-  } else {
-    // Single block
-    UINT8 Command = IsWrite ? CMD24 : CMD17;
-    Status = SdCardSendCommandSpi(Private, Command, Address, &Response);
-    if (EFI_ERROR(Status) || (Response & 0x80) != 0) {
-      return EFI_DEVICE_ERROR;
-    }
-
-    if (IsWrite) {
-      Status = SdCardWriteDataBlockSpi(Private, DATA_TOKEN_WRITE_SINGLE, SD_BLOCK_SIZE, CurrentBuffer);
-    } else {
-      Status = SdCardReadDataBlockSpi(Private, SD_BLOCK_SIZE, CurrentBuffer);
-    }
-  }
-
-  return Status;
-}
 
 // =============================================================================
 // Internal SPI Helper Functions
@@ -321,7 +248,7 @@ SdCardSendCommandSpi (
   CommandFrame[4] = (UINT8)(Argument & 0xFF);
 
   // Calculate proper CRC7 for all commands
-  Crc = CalculateCrc7(CommandFrame, 5);
+  Crc = SdCardCalculateCrc7(CommandFrame, 5);
   CommandFrame[5] = Crc;
 
   // Construct a single transaction buffer: 6-byte command + 8 dummy bytes for response
@@ -453,7 +380,7 @@ SdCardReadDataBlockSpi (
       ReceivedCrc = (UINT16)((CrcBytes[0] << 8) | CrcBytes[1]);
 
       // Calculate CRC and compare
-      CalculatedCrc = CalculateCrc16(Buffer, Length);
+      CalculatedCrc = SdCardCalculateCrc16(Buffer, Length);;
       if (ReceivedCrc != CalculatedCrc) {
         DEBUG((DEBUG_ERROR, "SdCardReadDataBlockSpi: CRC mismatch! Received: 0x%04X, Calculated: 0x%04X\n",
                ReceivedCrc, CalculatedCrc));
@@ -487,7 +414,7 @@ SdCardWriteDataBlockSpi (
   UINT16 Crc;
 
   // Calculate CRC for the data block
-  Crc = CalculateCrc16(Buffer, Length);
+  Crc = SdCardCalculateCrc16(Buffer, Length);
 
   // Send data token
   SpiTransferBuffer(Private, &Token, NULL, 1);

@@ -20,7 +20,7 @@
 [Packages]
   MdePkg/MdePkg.dec
   MdeModulePkg/MdeModulePkg.dec
-  ../../SdCardDxe/SdCardDxe.dec
+  ../SdCardDxe/SdCardDxe.dec
 
 [LibraryClasses]
   UefiDriverEntryPoint

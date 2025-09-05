@@ -5,7 +5,6 @@
 #include "SdCardDxe.h"
 #include <Library/BaseLib.h>
 
-
 //
 // SD Command definitions
 //
@@ -43,8 +42,6 @@
 #define R1_ADDRESS_ERROR            (1 << 5)
 #define R1_PARAMETER_ERROR          (1 << 6)
 
-
-
 /**
   Initializes the SD card in Host mode.
 **/
@@ -56,15 +53,27 @@ SdCardInitializeHost (
 
 /**
   Host mode read/write function.
+  
+  @param[in]      Private     SD card private data
+  @param[in]      Lba         Logical Block Address to read from/write to
+  @param[in]      BufferSize  Size of the buffer in bytes
+  @param[in,out]  Buffer      For write operations: pointer to data to write (IN)
+                              For read operations: pointer to buffer for read data (OUT)
+  @param[in]      IsWrite     TRUE for write operation, FALSE for read operation
+  
+  @retval EFI_SUCCESS           The operation completed successfully
+  @retval EFI_INVALID_PARAMETER One or more parameters are invalid
+  @retval EFI_NO_MEDIA          The device has no media
+  @retval EFI_DEVICE_ERROR      The device reported an error
 **/
 EFI_STATUS
 EFIAPI
 SdCardExecuteReadWriteHost (
-  IN  SD_CARD_PRIVATE_DATA  *Private,
-  IN  EFI_LBA               Lba,
-  IN  UINTN                 BufferSize,
-  IN  VOID                  *Buffer,
-  IN  BOOLEAN               IsWrite
+  IN     SD_CARD_PRIVATE_DATA  *Private,
+  IN     EFI_LBA               Lba,
+  IN     UINTN                 BufferSize,
+  IN OUT VOID                  *Buffer,
+  IN     BOOLEAN               IsWrite
   );
 
 /**
@@ -72,6 +81,28 @@ SdCardExecuteReadWriteHost (
   @param[in] SdError  SD card error code from R1 response
   @return Corresponding EFI_STATUS value
 **/
+EFI_STATUS
+EFIAPI
+SdCardMapSdErrorToEfiStatus (
+  IN UINT32  SdError
+  );
+
+/**
+  Sends a command to the SD card in MMC Host mode.
+  @param[in] Private   SD card private data
+  @param[in] Command   Command index
+  @param[in] Argument  Command argument
+  @param[out] Response Pointer to store response
+  @return EFI_STATUS
+**/
+EFI_STATUS
+EFIAPI
+SdCardSendCommandHost (
+  IN  SD_CARD_PRIVATE_DATA  *Private,
+  IN  UINT8                 Command,
+  IN  UINT32                Argument,
+  OUT UINT32                *Response
+  );
 
 /**
   Handles hotplug events in host mode.
@@ -134,34 +165,6 @@ EFIAPI
 ErrorRecoveryHost (
   IN SD_CARD_PRIVATE_DATA  *Private,
   IN EFI_STATUS            Status
-  );
-
-  /**
-  Maps SD card specific error codes to EFI_STATUS values.
-  @param[in] SdError  SD card error code from R1 response
-  @return Corresponding EFI_STATUS value
-**/
-EFI_STATUS
-EFIAPI
-SdCardMapSdErrorToEfiStatus (
-  IN UINT32  SdError
-  );
-
-/**
-  Sends a command to the SD card in MMC Host mode.
-  @param[in] Private   SD card private data
-  @param[in] Command   Command index
-  @param[in] Argument  Command argument
-  @param[out] Response Pointer to store response
-  @return EFI_STATUS
-**/
-EFI_STATUS
-EFIAPI
-SdCardSendCommandHost (
-  IN  SD_CARD_PRIVATE_DATA  *Private,
-  IN  UINT8                 Command,
-  IN  UINT32                Argument,
-  OUT UINT32                *Response
   );
 
 #endif // HOST_IO_H_

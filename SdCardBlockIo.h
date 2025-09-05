@@ -1,6 +1,13 @@
 #ifndef SD_CARD_Block_IO_H_
 #define SD_CARD_Block_IO_H_
-
+#include <Uefi.h>
+#include <Protocol/SpiHc.h>
+#include <Protocol/SdMmcPassThru.h>
+#include <Protocol/DriverBinding.h>
+#include <Protocol/BlockIo.h>
+#include <Library/DebugLib.h>
+#include <Library/BaseMemoryLib.h>
+#include "SdCardDxe.h"
 /**
   @file
   SD Card Driver Header - Provides definitions for SD card operations in both
@@ -14,14 +21,6 @@
   - SDIO Card Specification Version 3.00
   - UEFI Specification Version 2.8
 **/
-
-#include <Uefi.h>
-#include <Protocol/SpiHc.h>
-#include <Protocol/SdMmcPassThru.h>
-#include <Protocol/DriverBinding.h>
-#include <Protocol/BlockIo.h>
-#include <Library/DebugLib.h>
-#include <Library/BaseMemoryLib.h>
 
 #pragma pack(1)
 
@@ -150,5 +149,29 @@ SdCardParseCsdRegister (
   OUT UINT32       *BlockSize,
   OUT BOOLEAN      *IsHighCapacity
   );
-
+/**
+  Implementation of EFI_BLOCK_IO_PROTOCOL.ReadBlocks()
+  
+  @param[in]  This        Pointer to the Block I/O protocol instance
+  @param[in]  MediaId     ID of the media, changes every time the media is replaced
+  @param[in]  Lba         Starting Logical Block Address to read from
+  @param[in]  BufferSize  Size of Buffer, must be a multiple of device block size
+  @param[out] Buffer      Pointer to the destination buffer for the data
+  
+  @retval EFI_SUCCESS           The data was read correctly from the device
+  @retval EFI_DEVICE_ERROR      The device reported an error while reading
+  @retval EFI_NO_MEDIA          There is no media in the device
+  @retval EFI_MEDIA_CHANGED     The MediaId does not match the current device
+  @retval EFI_BAD_BUFFER_SIZE   BufferSize is not a multiple of the block size
+  @retval EFI_INVALID_PARAMETER The read request contains an invalid LBA
+**/
+EFI_STATUS
+EFIAPI
+SdCardBlockIoReadBlocks (
+  IN EFI_BLOCK_IO_PROTOCOL  *This,
+  IN UINT32                 MediaId,
+  IN EFI_LBA                Lba,
+  IN UINTN                  BufferSize,
+  OUT VOID                  *Buffer
+  );
 #endif // SD_CARD_Block_IO_H_

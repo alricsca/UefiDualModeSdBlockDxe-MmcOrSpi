@@ -1,10 +1,13 @@
 
 #ifndef __DRIVER_LIB_H__
 #define __DRIVER_LIB_H__
-
 #include <Uefi.h>
 #include <Protocol/SpiHc.h>
 #include "SdCardBlockIo.h"
+#include <Library/BaseLib.h>      // For basic arithmetic operations
+#include <Library/BaseMemoryLib.h> // For memory operations (SetMem, CopyMem)
+#include <Library/DebugLib.h>     // For debug output
+#include <Library/MemoryAllocationLib.h> // For memory allocation
 
 //
 // Forward declaration
@@ -216,25 +219,16 @@ SdCardHandleModeFallback (
   IN EFI_STATUS            InitializationStatus
   );
 
-  /** @file
-  CRC calculation function prototypes for SD card commands and data blocks.
-
-  Provides CRC7 and CRC16 calculation functions for SD card protocol operations.
-
-  Copyright (c) 2025
-  SPDX-License-Identifier: BSD-2-Clause-Patent
-**/
-
-/**
+  /**
   Calculates CRC7 for SD card commands.
   Polynomial: x^7 + x^3 + 1 (0x89)
-  @param[in]  Data    Pointer to the input data buffer.
-  @param[in]  Length  Number of bytes in the buffer.
-  @retval CRC7 value with SD protocol formatting.
+  @param[in] Data    Data to calculate CRC for
+  @param[in] Length  Length of data
+  @return CRC7 value
 **/
 UINT8
 EFIAPI
-CalculateCrc7 (
+SdCardCalculateCrc7 (
   IN CONST UINT8  *Data,
   IN UINTN        Length
   );
@@ -242,9 +236,14 @@ CalculateCrc7 (
 /**
   Calculates CRC16 for SD card data blocks.
   Polynomial: x^16 + x^12 + x^5 + 1 (0x1021)
-  @param[in]  Data    Pointer to the input data buffer.
-  @param[in]  Length  Number of bytes in the buffer.
-  @retval CRC16 value.
+  @param[in] Data    Data to calculate CRC for
+  @param[in] Length  Length of data
+  @return CRC16 value
 **/
-
+UINT16
+EFIAPI
+SdCardCalculateCrc16 (
+  IN CONST UINT8  *Data,
+  IN UINTN        Length
+  );
 #endif // __DRIVER_LIB_H__

@@ -100,6 +100,28 @@ EFI_STATUS EFIAPI SdCardReadDataBlockSpi(SD_CARD_PRIVATE_DATA *Private, UINTN Le
 EFI_STATUS EFIAPI SdCardWriteDataBlockSpi(SD_CARD_PRIVATE_DATA *Private, UINT8 Token, UINTN Length, CONST UINT8 *Buffer);
 EFI_STATUS EFIAPI SdCardParseCsdSpi(SD_CARD_PRIVATE_DATA *Private, UINT8 *Csd);
 EFI_STATUS EFIAPI SdCardInitializeSpi(SD_CARD_PRIVATE_DATA *Private);
-EFI_STATUS EFIAPI SdCardExecuteReadWriteSpi(SD_CARD_PRIVATE_DATA *Private, EFI_LBA Lba, UINTN BufferSize, VOID *Buffer, BOOLEAN IsWrite);
+/**
+  Execute SPI data transfer.
+
+  @param[in]      Private           The pointer to the SD_CARD_PRIVATE_DATA instance.
+  @param[in]      Lba               The logical block address to be read from or written to.
+  @param[in]      BufferSize        The size of the buffer.
+  @param[in,out]  Buffer            A pointer to the data buffer.
+  @param[in]      IsWrite           Indicates the data is written (TRUE) or read (FALSE).
+
+  @retval EFI_SUCCESS           The data was transferred correctly.
+  @retval EFI_DEVICE_ERROR      The device reported an error.
+  @retval EFI_TIMEOUT           The timeout time expired.
+
+**/
+EFI_STATUS
+EFIAPI
+SdCardExecuteReadWriteSpi (
+  IN     SD_CARD_PRIVATE_DATA       *Private,
+  IN     EFI_LBA                    Lba,
+  IN     UINTN                      BufferSize,
+  IN OUT VOID                       *Buffer,
+  IN     BOOLEAN                    IsWrite
+  );
 
 #endif // SPI_IO_H_
