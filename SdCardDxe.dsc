@@ -29,7 +29,7 @@
   StackCheckFailureHookLib|MdePkg/Library/StackCheckFailureHookLibNull/StackCheckFailureHookLibNull.inf
 
 [Components]
-../../SdCardDxe/SdCardDxe.inf
+../SdCardDxe/SdCardDxe.inf
 
 [LibraryClasses.common.UEFI_DRIVER]
   UefiDriverEntryPoint|MdePkg/Library/UefiDriverEntryPoint/UefiDriverEntryPoint.inf
