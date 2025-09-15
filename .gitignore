@@ -1,3 +1,7 @@
-Build/ Build_temp/ build/ tests/
-*.log *.tmp *.o *.obj *.elf *.efi *.so *.dll *.lib *.a *.img *.bin
-.DS_Store .vscode/ .idea/ *.swp
+Build/
+Build_temp/
+build/
+tests/
+.vscode/ 
+.idea/
+*.log *.tmp *.o *.obj *.elf *.efi *.so *.dll *.lib *.a *.img *.bin .DS_Store *.swp
