@@ -10,8 +10,13 @@
   SKUID_IDENTIFIER               = DEFAULT
 
 [LibraryClasses]
-  UefiDriverEntryPoint|MdePkg/Library/UefiDriverEntryPoint/UefiDriverEntryPoint.inf
+  ShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
+  HiiLib|MdeModulePkg/Library/UefiHiiLib/UefiHiiLib.inf
+  SortLib|MdeModulePkg/Library/UefiSortLib/UefiSortLib.inf
   UefiLib|MdePkg/Library/UefiLib/UefiLib.inf
+  UefiHiiLib|MdeModulePkg/Library/UefiHiiLib/UefiHiiLib.inf
+  UefiHiiServicesLib|MdeModulePkg/Library/UefiHiiServicesLib/UefiHiiServicesLib.inf
+  UefiShellLib|ShellPkg/Library/UefiShellLib/UefiShellLib.inf
   DebugLib|MdePkg/Library/UefiDebugLibConOut/UefiDebugLibConOut.inf
   BaseLib|MdePkg/Library/BaseLib/BaseLib.inf
   MemoryAllocationLib|MdePkg/Library/UefiMemoryAllocationLib/UefiMemoryAllocationLib.inf

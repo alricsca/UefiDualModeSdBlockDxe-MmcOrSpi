@@ -7,8 +7,9 @@
 [Guids]
   ## SdCardDxe PCD Token Space GUID
   gEfiSdCardDxeTokenSpaceGuid    = { 0x0f1e2d3c, 0x4b5a, 0x6978, { 0x8f, 0x90, 0xaa, 0xbb, 0xcc, 0xdd, 0xef, 0xf1 } }
-
-[LibraryClasses]
+  gSdCardDevicePathGuid = {0x8f0d5b9c, 0x1c13, 0x49a5, {0x93, 0x82, 0x6d, 0x84, 0x3e, 0x80, 0x55, 0x25}}
+  
+  [LibraryClasses]
   UefiDriverEntryPoint
   UefiBootServicesTableLib
   UefiLib
@@ -28,10 +29,11 @@
   SdDxeLib
   ByteSwapLib
 
-
+[PcdsFixedAtBuild.common]
+  
 [PcdsDynamic.common]
   ## If TRUE, forces the driver to use SPI mode even if an SDHCI controller is available
-  gEfiSdCardDxeTokenSpaceGuid.PcdSdCardSpiOnlyMode    | FALSE | BOOLEAN | 0x00010001
+  gEfiSdCardDxeTokenSpaceGuid.PcdSdCardSpiOnlyMode|FALSE|BOOLEAN|0x00000001
 
   ## SD card initialization timeout in milliseconds
   gEfiSdCardDxeTokenSpaceGuid.PcdSdCardInitTimeoutMs  | 1000  | UINT32  | 0x00010002

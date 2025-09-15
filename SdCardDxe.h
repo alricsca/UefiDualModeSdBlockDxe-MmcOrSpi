@@ -12,6 +12,9 @@
 #include <Library/BaseLib.h>
 #include "SdCardBlockIo.h"
 
+// Define SD Card Device Path GUID
+extern EFI_GUID gSdCardDevicePathGuid;
+
 typedef enum {
   SD_CARD_MODE_UNKNOWN,
   SD_CARD_MODE_HOST,

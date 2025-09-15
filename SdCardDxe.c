@@ -20,9 +20,7 @@
 #include <Protocol/ComponentName.h>
 #include <Protocol/ComponentName2.h>
 #include <Protocol/ShellParameters.h>
-#include <Library/PcdLib.h>
 #include "SdCardHelp.h"
-
 
 // Add Component Name Protocol functions
 EFI_STATUS
@@ -50,11 +48,6 @@ GetControllerName (
   *ControllerName = L"SD Card Controller";
   return EFI_SUCCESS;
 }
-
-// Define SD Card Device Path GUID
-#define SD_CARD_DEVICE_PATH_GUID {0x8f0d5b9c, 0x1c13, 0x49a5, {0x93, 0x82, 0x6d, 0x84, 0x3e, 0x80, 0x55, 0x25}}
-
-EFI_GUID gSdCardDevicePathGuid = SD_CARD_DEVICE_PATH_GUID;
 
 // Define SD Card Device Path structure
 #pragma pack(1)
@@ -201,14 +194,14 @@ SdCardDriverBindingStart (
   //
   if (Mode == SD_CARD_MODE_HOST) {
     // Open MMC host protocol
-    Status = gBS->OpenProtocol(
-                    ControllerHandle,
-                    &gEfiSdMmcPassThruProtocolGuid,
-                    (VOID **)&Private->SdMmcPassThru,
-                    This->DriverBindingHandle,
-                    ControllerHandle,
-                    EFI_OPEN_PROTOCOL_BY_DRIVER
-                    );
+  Status = gBS->OpenProtocol(
+                  ControllerHandle,
+                  &gEfiSdMmcPassThruProtocolGuid,
+                  (VOID **)&Private->SdMmcPassThru,
+                  This->DriverBindingHandle,
+                  ControllerHandle,
+                  EFI_OPEN_PROTOCOL_BY_DRIVER
+                  );
     if (EFI_ERROR(Status)) {
       DEBUG((DEBUG_ERROR, "SdCardDxe: Failed to open MMC host protocol: %r\n", Status));
       goto Exit;
@@ -217,14 +210,14 @@ SdCardDriverBindingStart (
     DEBUG((DEBUG_INFO, "SdCardDxe: Operating in MMC host mode\n"));
   } else {
     // Open SPI protocol
-    Status = gBS->OpenProtocol(
-                    ControllerHandle,
-                    &gEfiSpiHcProtocolGuid,
-                    (VOID **)&Private->SpiHcProtocol,
-                    This->DriverBindingHandle,
-                    ControllerHandle,
-                    EFI_OPEN_PROTOCOL_BY_DRIVER
-                    );
+  Status = gBS->OpenProtocol(
+                  ControllerHandle,
+                  &gEfiSdMmcPassThruProtocolGuid,
+                  (VOID **)&Private->SdMmcPassThru,
+                  This->DriverBindingHandle,
+                  ControllerHandle,
+                  EFI_OPEN_PROTOCOL_BY_DRIVER
+                  );
     if (EFI_ERROR(Status)) {
       DEBUG((DEBUG_ERROR, "SdCardDxe: Failed to open SPI protocol: %r\n", Status));
       goto Exit;
@@ -257,6 +250,23 @@ SdCardDriverBindingStart (
     if (EFI_ERROR(Status)) {
       goto Exit;
     }
+  DEBUG((DEBUG_INFO, "SdCardInitialize: Starting initialization in mode %d\n", Private->Mode));
+
+if (Private->Mode == SD_CARD_MODE_HOST) {
+  DEBUG((DEBUG_INFO, "Attempting host mode initialization\n"));
+  Status = SdCardInitializeHost(Private);
+} else if (Private->Mode == SD_CARD_MODE_SPI) {
+  DEBUG((DEBUG_INFO, "Attempting SPI mode initialization\n"));
+  Status = SdCardInitializeSpi(Private);
+} else {
+  DEBUG((DEBUG_ERROR, "Unknown mode: %d\n", Private->Mode));
+  Status = EFI_UNSUPPORTED;
+}
+
+if (EFI_ERROR(Status)) {
+  DEBUG((DEBUG_ERROR, "Initialization failed: %r\n", Status));
+}
+  
   }
 
   //
